@@ -40,7 +40,6 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
-#include <reverse_iterator.h>
 #include <script/script.h>
 #include <script/sigcache.h>
 #include <signet.h>
@@ -70,6 +69,7 @@
 #include <deque>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -106,6 +106,21 @@ const std::vector<std::string> CHECKLEVEL_DOC {
  *  noticeably interfere with the pruning mechanism.
  * */
 static constexpr int PRUNE_LOCK_BUFFER{10};
+
+/**
+ * Maximum number of seconds that the timestamp of the first
+ * block of a difficulty adjustment period is allowed to
+ * be earlier than the last block of the previous period (BIP94).
+ */
+static constexpr int64_t MAX_TIMEWARP{MAX_FUTURE_BLOCK_TIME};
+
+/**
+ * If the timestamp of the last block in a difficulty period is set
+ * MAX_FUTURE_BLOCK_TIME seconds in the future, an honest miner should
+ * be able to mine the first block using the current time. This is not
+ * a consensus rule, but changing MAX_TIMEWARP should be done with caution.
+ */
+static_assert(MAX_FUTURE_BLOCK_TIME <= MAX_TIMEWARP);
 
 GlobalMutex g_best_block_mutex;
 std::condition_variable g_best_block_cv;
@@ -3357,7 +3372,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
         nHeight = nTargetHeight;
 
         // Connect new blocks.
-        for (CBlockIndex* pindexConnect : reverse_iterate(vpindexToConnect)) {
+        for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
             if (!ConnectTip(state, pindexConnect, pindexConnect == pindexMostWork ? pblock : std::shared_ptr<const CBlock>(), connectTrace, disconnectpool)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
@@ -4188,7 +4203,7 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
         // Check timestamp for the first block of each difficulty adjustment
         // interval, except the genesis block.
         if (nHeight % consensusParams.DifficultyAdjustmentInterval() == 0) {
-            if (block.GetBlockTime() < pindexPrev->GetBlockTime() - 60 * 60 * 2) {
+            if (block.GetBlockTime() < pindexPrev->GetBlockTime() - MAX_TIMEWARP) {
                 return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "time-timewarp-attack", "block's timestamp is too early on diff adjustment block");
             }
         }
